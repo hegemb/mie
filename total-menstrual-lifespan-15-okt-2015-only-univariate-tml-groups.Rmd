@@ -1,0 +1,798 @@
+---
+title: "Total menstrual lifespan grouped"
+author: "Hege MB"
+date: "15 Oct 2015"
+output: pdf_document
+---
+
+We want to calculate the total menstrual lifespan (TML) (number of years with ovulation), and use this as a variable in the Cox regression analysis. By doing this, we reduce the number of variables that needs to be estimated. 
+Total menstrual lifespan is computed using the following rule: 
+
+We subtract the menarche age from the age at menopause, along with number of years using oral contraceptives, the number of children and months of breastfeeding. Here, each child count as 9 months + number of months with breastfeeding.
+
+Follow-up time is the number of years from menopause (or inclusion in NOWAC, whatever is the highest) until cancer event. We use the variable "FKLIMALD"" to set the age at menopause, and if no age is given we insert 50 years (50 years is the median age of menopause in NOWAC). "FKLIMALD" is a variable that Tonje Braaten has made, and should be our most reliable variable on "age at menopause".  
+
+The total menstrual lifespan is grouped as follows (years): 
+(0 - 15], (15 - 25], (25 - 35], (35 - 48.7]. 
+
+We will only use postmenopausal women in this analysis.
+ 
+ We have to create the following variables: 
+ 
+ * age at inclusion, i.e. age at menopause or inclusion in NOWAC, whatever is highest).
+ * follow-up time (time since inclusion in NOWAC or menopause until cancer event or censoring)
+ * censoring index (the same as before, but with only postmenopausal women)
+ * total menstrual lifespan, see description above.
+ 
+Cancer information used is updated through 31.12.2013. 
+
+ 
+ 
+```{r import library, echo=F}
+#############################################
+## Import libaries:
+#############################################
+
+require(knitr)
+require(pander)
+#source("http://bioconductor.org/biocLite.R")
+#biocLite("survcomp")
+require(survcomp)
+require(rmeta)
+```
+
+```{r import data}
+
+#############################################
+## Set paths:
+#############################################
+setwd("/Users/hegemb/Documents/jobb/TICE/ovarian cancer :: Mie Jareid/scripts")
+wd <- getwd()
+setwd("..")
+dataPath <- file.path(getwd(), "data") ## folder to save data files
+resultPath <- file.path(getwd(),"results") ## folder to store results
+setwd(wd)
+
+#############################################
+## Import main data:
+#############################################
+files <- file.path(dataPath, "data-20Aug2015-prepared-for-cox-analysis.Rdata")
+load(files)
+rownames(data) <- data$LPNR
+dim(data)
+
+#dato <- "2015-08-20"
+saveToFile <- FALSE
+```
+
+## Find inclusion time and total menstrual lifespan 
+
+We will for each woman find the inclusion time, which is the largest of age at menopause and age at inclusion in NOWAC. We will also calculate the total menstrual lifespan. For both, we will use 50 years for menopausal age if no information is given (this is the median reported age of menopause in NOWAC).
+```{r, echo=FALSE, include=F}
+forcePost <- 50 ## age at which women will be forced to be postmenopausal if no other info is given.
+
+## 1) Find age at menopause, that will be used to calculate the total menstrual lifespan:
+klimAld <- data$FKLIMALD
+## How many women have a value for menopause, and how many do we have to impute?
+## Number of women with no information on age at menopause:
+length(which(!is.na(data$FKLIMALD)))
+## Number of women with information on age at menopause:
+length(which(is.na(data$FKLIMALD)))
+## We will insert age at menopause for women that have no reported age, and that have attained age > forcePost:
+ii <- which(is.na(data$FKLIMALD) & data$attained_age > forcePost)
+length(ii)
+klimAld[ii] <- forcePost ## insert menopause age if value for FKLIMALD is missing. 
+## We must also make sure that the attained age is not smaller than recorded age at menopause (for women with more than one questionnaire, and a cancer diagnosis between the questionnaires):
+klimAld[which(data$FKLIMALD >= data$attained_age)] <- NA ## women with menopause after censoring/event is set to NA (i.e. set to premenopausal).
+## Include klimAld into the data object:
+data <- cbind(data, klimAld) ## Add age at menopause to data
+rm(klimAld)
+
+## Investigate the women that are considered premenopausal and thus not included in our further studies:
+preOut.lpnr <- rownames(data)[which(is.na(data$klimAld))]
+ ## Number of women that are excluded since we only consider postmenopausal women:
+length(preOut.lpnr)
+ ## Of these, the number of cases that are excluded are:
+sum(data[preOut.lpnr,"cens_ind_uterus"]) #uterus
+sum(data[preOut.lpnr,"cens_ind_ovarian"]) #ovarian
+
+## Take a look at the age distribution (age at cancer diagnosis) for these premeno women:
+par(mfrow=c(2,2))
+preUterus.lpnr <- preOut.lpnr[which(data[preOut.lpnr,"cens_ind_uterus"]==1)]
+head(data[preUterus.lpnr,c("attained_age","STARTALD")])
+hist(data[preUterus.lpnr,c("attained_age")])
+plot(data[preUterus.lpnr, "attained_age"],data[preUterus.lpnr, "STARTALD"],asp=1)
+mean(data$FKLIMALD,na.rm=T) ## mean age at menopause in NOWAC
+quantile(data$FKLIMALD,na.rm=T)
+
+preOvarian.lpnr <- preOut.lpnr[which(data[preOut.lpnr,"cens_ind_ovarian"]==1)]
+length(preOvarian.lpnr)
+#data[preOvarian.lpnr,c("attained_age","klimAld","STARTALD","FKLIMALD","STARTDAT","attained_date" ,"ystartdat","BORTMENS","MENOSTATUS")]
+hist(data[preOvarian.lpnr,c("attained_age")])
+plot(data[preOvarian.lpnr, "attained_age"],data[preOvarian.lpnr, "STARTALD"],asp=1)
+
+## 2) Find the left truncated inclusion time (age) in the Cox regression, which is defined as follows:
+# * Age at inclusion in NOWAC for women that are postmenopausale prior to inclusion in NOWAC. klimAld < startald.
+# * Recorded (women with more than one questionnaire) or given (forcePost) age at menopause for women that become menopausal during our study. startald < klimAld < attained_age.
+
+innAlderPost <- data$klimAld ## We insert age at menopause (calculated above) for all women, and modify in the next line:
+innAlderPost[which(data$klimAld < data$STARTALD)] <- data$STARTALD[which(data$klimAld < data$STARTALD)] ## insert age at inclusion for women postmeno prior to inclusion in nowac.
+data$innAlderPost <- innAlderPost ## Add to dataset 
+rm(innAlderPost) ## remove variable
+par(mfcol=c(1,2))
+hist(data$innAlderPost, main="Left truncated inclusion time")
+
+## Will not be used: Calculate the new follow up time, which is the years from menopause until censoring/event:
+followUp <- data$attained_age - data$innAlderPost
+quantile(followUp,na.rm=T)
+## Check if someone have follow up time of 0 
+## (This will not be accepted in Cox regression, and if any they shold be removed):
+if(any(data$attained_age == data$innAlderPost,na.rm=T)){
+  ## This will not be accepted in Cox regression. We remove them.
+  data0 <- data[-which(data$attained_age == data$innAlderPost),]
+  dim(data0) - dim(data)
+  data <- data0
+  }
+## Calculate the total menstrual lifespan. This will be done in two ways: 
+## 1) Age at menopause - age at menarche - years of OC use - number of children
+## 2) Age at menopause - age at menarche - years of OC use - 0.75*number of children - total months of breastfeeding/12
+
+## Investige possible NA values in the variables to be used:
+sum(is.na(data$MENSALD)) ## NA-values in the cohort.
+sum(is.na(data$totalppdur)) ## no NA-values
+sum(is.na(data$parity)) ## no NA-values
+sum(is.na(data$totalamm)) ## 17188 NA values. Set to 0:
+data[which(is.na(data$totalamm)),"totalamm"] <- 0
+
+## Version 1) 
+## Let the number of children count as one year per child, and disregard information 
+## on breast feeding:
+subtract1 <- data$MENSALD + data$totalppdur + data$parity
+quantile(subtract1,na.rm=T)
+## Version 2)
+## Let the number of children count as 9 months (0.75 years), and add months of 
+## breast feeding:
+subtract2 <- data$MENSALD + data$totalppdur + data$parity*0.75 + data$totalamm/12
+quantile(subtract2,na.rm=T)
+plot(subtract1,subtract2)
+
+## Look at menstrual lifespan without removing years for lifetime events (oc use, parity etc):
+hist(data$klimAld - data$MENSALD)
+mean(data$klimAld - data$MENSALD,na.rm=T)
+quantile(data$klimAld - data$MENSALD,na.rm=T)
+## Create and add these two variables to the data: 
+data$totalMensLifePar <- data$klimAld - subtract1
+data$totalMensLifeBfPar <- data$klimAld - subtract2
+
+## Investigate values:
+quantile(data$totalMensLifePar,na.rm=T)
+quantile(data$totalMensLifeBfPar,na.rm=T)
+
+## some women have negative total menstrual lifespan. We investigate them:
+n1 <- which(data$totalMensLifePar<0)
+n2 <- which(data$totalMensLifeBfPar<0)
+
+cbind(data[n1,c("klimAld","parity","totalppdur","FKLIMALD","MENSALD","innAlderPost")],subtract1[n1],subtract2[n1])
+
+#cbind(data[which(totalMensLS1<0),c("klimAld","MENSALD", "totalppdur","parity","MORALD","totalMensLifePar")], data[which(totalMensLS1<0),"klimAld"] - data[which(totalMensLS1<0),"MENSALD"])
+#cbind(data[which(totalMensLS2<0),c("klimAld","MENSALD", "totalppdur","parity","totalamm","MORALD","totalMensLifeBfPar")], data[which(totalMensLS2<0),"klimAld"] - data[which(totalMensLS2<0),"MENSALD"])
+
+## For most of these women with negative total menstural lifespan, they have used OC longer than (age at menopause - age at menarche).
+## For now, we remove these women from our analysis
+out1 <- rownames(data)[unique(c(which(data$totalMensLifePar<0), which(data$totalMensLifeBfPar<0)))]
+length(out1) ## number of women to remove
+
+## Look at values and if there are cases amongh the women with negative total menstrual lifespan:
+range(data[out1,"totalMensLifePar"])
+range(data[out1,"totalMensLifeBfPar"])
+sum(data[out1,"cens_ind_uterus"])
+sum(data[out1,"cens_ind_ovarian"])
+
+## Remove the women with negative value of total menstrual lifespan.
+data0 <- data ## Save a copy
+data <- data[!rownames(data)%in%out1,]
+dim(data0)[1] - dim(data)[1] ## how many women do we remove
+
+quantile(data$totalMensLifePar,na.rm=T)
+quantile(data$totalMensLifeBfPar,na.rm=T)
+par(mfrow=c(1,2))
+hist(data$totalMensLifePar)
+hist(data$totalMensLifeBfPar)
+par(mfrow=c(1,1))
+plot(data$totalMensLifePar,data$totalMensLifeBfPar)
+abline(0,1,col="red")
+```
+We will only include postmenopausal women in our analysis. We thus remove women that are premenopausal.
+
+```{r}
+data0 <- data
+data <- subset(data, !is.na(data$klimAld))
+## Number of premenopausal women removed:
+dim(data) - dim(data0) 
+sum(is.na(data0$klimAld))
+sum(is.na(data$klimAld))
+## Number of women in our data: 
+dim(data)
+
+#########################################
+## Save data with total menstrual lifespan
+## to file
+#########################################
+files <- file.path(dataPath, "data-20Aug2015-with-total-menstrual-lifespan.Rdata")
+
+if(file.exists(files))
+{
+  print("File already exists. Can not save.")
+} else {
+  print(paste("saving data to file",files,sep=" "))
+  save(data, file=files)  
+}
+
+
+```
+
+## Include histology information:
+
+```{r histology information, echo=F,include=F}
+############################################
+## Import histology information, code
+## provided by Mie Jareid
+############################################
+## Codes have been provided by Mie Jareid
+file1 <- file.path(dataPath,"uterus-cancer-histologi.csv")
+print(file1)
+histology.uterus <- read.csv(file=file1,sep=";")
+file2 <- file.path(dataPath,"ovarial-cancer-histologi.csv")
+print(file2)
+histology.ovarian <- read.csv(file=file2,sep=";")
+
+# Hva trenger jeg for analyser: 
+# For hver subgruppe, trenger jeg en indikator for hvilke individer som er
+# med i gruppen. Denne indikatoren brukes på både varCox og timeIndCox, og så 
+# kjøres filer med relative risk etc som vanlig. 
+
+## Make function to remove NA values from the list of histology codes:
+remove.na.list <- function(dd){
+  lapply(as.list(dd),function(x)x[!is.na(x)])
+}
+
+## Apply the function to the variables for both cancer types. We obtain a 
+## list of histology values for each cancer subgroup: 
+histo.uterus <- remove.na.list(histology.uterus)
+histo.ovarian <- remove.na.list(histology.ovarian)
+
+## Check that we have included all morphology codes in the all.uterus and all.ovarian:
+## NOTE June 2 2015: this is no longer true, as many cases are removed as premenopausal.
+length(unique(data[which(data$cens_ind_ovarian==1),"diagMORF1"])) == length(histo.ovarian[[1]])
+all(histo.ovarian[[1]] %in% unique(data[which(data$cens_ind_ovarian==1),"diagMORF1"]))
+
+length(unique(data[which(data$cens_ind_uterus==1),"diagMORF1"])) == length(histo.uterus[[1]])
+all(histo.uterus[[1]] %in% unique(data[which(data$cens_ind_uterus==1),"diagMORF1"]))
+
+
+##################################
+## Pick out LPNR of the subgroups
+##################################
+## Want to pick out LPNR for women in the different histology groups.
+uterus.by.histo.LPNR <- lapply(histo.uterus, function(x) data$LPNR[which(data$diagMORF1 %in% x & data$cens_ind_uterus == 1)]) ## LPNR of women in hist group.
+ovarian.by.histo.LPNR <- lapply(histo.ovarian, function(x) data$LPNR[which(data$diagMORF1 %in% x & data$cens_ind_ovarian == 1)]) ## LPNR of women in hist group.
+
+######################################
+## MERGE Endometrioid and clear cell 
+## for ovarian and uterus cancer, 
+## and pick out subset of the histological 
+## groups.
+######################################
+## Uterus:
+uterus.by.histo.LPNR$Endometrioid.clearCell <- c(uterus.by.histo.LPNR$Endometrioid,uterus.by.histo.LPNR$Clear.cell)
+str(uterus.by.histo.LPNR)
+#sub.uterus.by.histo.LPNR <- uterus.by.histo.LPNR[c("All.uterus","All.endometrial","Endometrioid.clearCell","Serous","Adenocarcinoma.NOS","Squamous.carcinoma")]
+sub.uterus.by.histo.LPNR <- uterus.by.histo.LPNR[c("All.uterus","All.endometrial","Endometrioid.clearCell","Serous","Endometrioid","Clear.cell")]
+uterus.by.histo.LPNR <- sub.uterus.by.histo.LPNR
+str(uterus.by.histo.LPNR)
+
+#Ovarian:
+ovarian.by.histo.LPNR$Endometrioid.clearCell <- c(ovarian.by.histo.LPNR$Endometrioid,ovarian.by.histo.LPNR$Clear.cell)
+str(ovarian.by.histo.LPNR)
+#sub.ovarian.by.histo.LPNR <- ovarian.by.histo.LPNR[c("All.ovarial","All.epithelial","Endometrioid.clearCell","Serous","Adenocarcinoma.NOS")]
+sub.ovarian.by.histo.LPNR <- ovarian.by.histo.LPNR[c("All.ovarial","All.epithelial","Endometrioid.clearCell","Serous","Endometrioid","Clear.cell")]
+ovarian.by.histo.LPNR <- sub.ovarian.by.histo.LPNR
+str(ovarian.by.histo.LPNR)
+
+###########################################
+## Extract the non-epithelial uterus and 
+## ovarian cases. 01.sept 2015
+##########################################
+uterus.by.histo.LPNR$non.endometrial <- setdiff(uterus.by.histo.LPNR$All.uterus,uterus.by.histo.LPNR$All.endometrial)
+## Small test:
+all(uterus.by.histo.LPNR$non.endometrial %in% uterus.by.histo.LPNR$All.uterus) ## Should be TRUE
+all(!uterus.by.histo.LPNR$non.endometrial %in% uterus.by.histo.LPNR$All.endometrial)## Should be TRUE
+
+ovarian.by.histo.LPNR$non.epithelial <- setdiff(ovarian.by.histo.LPNR$All.ovarial, ovarian.by.histo.LPNR$All.epithelial)
+## Small test:
+all(ovarian.by.histo.LPNR$non.epithelial %in% ovarian.by.histo.LPNR$All.ovarial)## Should be TRUE
+all(!ovarian.by.histo.LPNR$non.epithelial %in% ovarian.by.histo.LPNR$All.epithelial)## Should be TRUE
+
+###########################################
+## Merge different histological subtypes
+###########################################
+## Merge Endometrioid ovarian cancer with Endometrioid uterus cancer: 
+uterus.by.histo.LPNR$Endometrioid.moved <- c(uterus.by.histo.LPNR$Endometrioid, ovarian.by.histo.LPNR$Endometrioid)
+ovarian.by.histo.LPNR$All.epithelial.minus.Endometrioid <- setdiff(ovarian.by.histo.LPNR$All.epithelial,ovarian.by.histo.LPNR$Endometrioid) ## All.epithelial after moving the specified histological group.
+ovarian.by.histo.LPNR$All.ovarial.minus.Endometrioid <- setdiff(ovarian.by.histo.LPNR$All.ovarial,ovarian.by.histo.LPNR$Endometrioid) ## All.ovarial after moving the specified histological group.
+uterus.by.histo.LPNR$All.uterus.plus.ovary.Endometrioid <- c(uterus.by.histo.LPNR$All.uterus,ovarian.by.histo.LPNR$Endometrioid)
+uterus.by.histo.LPNR$All.endometrial.plus.ovary.Endometrioid <- c(uterus.by.histo.LPNR$All.endometrial,ovarian.by.histo.LPNR$Endometrioid)
+
+## Merge clear cell ovarian cancer with clear cell uterus cancer:
+uterus.by.histo.LPNR$Clear.cell.moved <- c(uterus.by.histo.LPNR$Clear.cell, ovarian.by.histo.LPNR$Clear.cell)
+ovarian.by.histo.LPNR$All.epithelial.minus.Clear.cell <- setdiff(ovarian.by.histo.LPNR$All.epithelial,ovarian.by.histo.LPNR$Clear.cell)## All.epithelial after moving the specified histological group.
+ovarian.by.histo.LPNR$All.ovarial.minus.Clear.cell <- setdiff(ovarian.by.histo.LPNR$All.ovarial,ovarian.by.histo.LPNR$Clear.cell)## All.ovarial after moving the specified histological group.
+uterus.by.histo.LPNR$All.uterus.plus.ovary.Clear.cell <- c(uterus.by.histo.LPNR$All.uterus,ovarian.by.histo.LPNR$Clear.cell)
+uterus.by.histo.LPNR$All.endometrial.plus.ovary.Clear.cell <- c(uterus.by.histo.LPNR$All.endometrial,ovarian.by.histo.LPNR$Clear.cell)
+
+
+## Merge the combined group Endometrioid.clearcell ovarian cancer with the corresponding group in uterus cancer:
+uterus.by.histo.LPNR$Endometrioid.clearCell.moved <- c(uterus.by.histo.LPNR$Endometrioid.clearCell, ovarian.by.histo.LPNR$Endometrioid.clearCell)
+ovarian.by.histo.LPNR$All.epithelial.minus.Endometrioid.clearCell <- setdiff(ovarian.by.histo.LPNR$All.epithelial,ovarian.by.histo.LPNR$Endometrioid.clearCell)## All.epithelial after moving the specified histological group.
+ovarian.by.histo.LPNR$All.ovarial.minus.Endometrioid.clearCell <- setdiff(ovarian.by.histo.LPNR$All.ovarial,ovarian.by.histo.LPNR$Endometrioid.clearCell)## All.ovarial after moving the specified histological group.
+uterus.by.histo.LPNR$All.uterus.plus.ovary.Endometrioid.clearCell <- c(uterus.by.histo.LPNR$All.uterus,ovarian.by.histo.LPNR$Endometrioid.clearCell)
+uterus.by.histo.LPNR$All.endometrial.plus.ovary.Endometrioid.clearCell <- c(uterus.by.histo.LPNR$All.endometrial,ovarian.by.histo.LPNR$Endometrioid.clearCell)
+
+
+## Merge serous ovarian cancer with serous uterus cancer: 
+uterus.by.histo.LPNR$Serous.moved <- c(uterus.by.histo.LPNR$Serous, ovarian.by.histo.LPNR$Serous)
+ovarian.by.histo.LPNR$All.epithelial.minus.Serous <- setdiff(ovarian.by.histo.LPNR$All.epithelial,ovarian.by.histo.LPNR$Serous)## All.epithelial after moving the specified histological group.
+ovarian.by.histo.LPNR$All.ovarial.minus.Serous <- setdiff(ovarian.by.histo.LPNR$All.ovarial,ovarian.by.histo.LPNR$Serous)## All.ovarial after moving the specified histological group.
+uterus.by.histo.LPNR$All.uterus.plus.ovary.Serous <- c(uterus.by.histo.LPNR$All.uterus,ovarian.by.histo.LPNR$Serous)
+uterus.by.histo.LPNR$All.endometrial.plus.ovary.Serous <- c(uterus.by.histo.LPNR$All.endometrial,ovarian.by.histo.LPNR$Serous)
+
+####################################################
+## Add a subgroup that moves tubal cancers (lok= 175.2) 
+## from serouse ovarian to serouse uterus
+####################################################
+## Find LPNR of women with serous ovarian cancer and lok=175.2:
+tubal.ovarian.LPNR <- ovarian.by.histo.LPNR$Serous[which(data[as.character(ovarian.by.histo.LPNR$Serous),"diagLok1"]==1752)]
+## Make a new group with the women found above and the serous uterus cancers:
+uterus.by.histo.LPNR$SerousAndTube <- c(uterus.by.histo.LPNR$Serous, tubal.ovarian.LPNR) ## uterus and ovarian cancers mixed
+uterus.by.histo.LPNR$SerousOnlyTube <- tubal.ovarian.LPNR ## only ovarian cancers (tubal)
+
+## Make a new group with the serous ovarian cases MINUS the tubal cases:
+ovarian.by.histo.LPNR$SerousNoTube <- setdiff(ovarian.by.histo.LPNR$Serous,tubal.ovarian.LPNR) ## only ovarian cancers (tubes removed)
+sum(ovarian.by.histo.LPNR$Serous %in% ovarian.by.histo.LPNR$SerousNoTube)#small check
+
+```
+
+
+Make table of the number of cases in each histological subgroup:
+
+```{r, echo=F}
+t1 <- sapply(uterus.by.histo.LPNR,length)
+t2 <- sapply(ovarian.by.histo.LPNR,length)
+t1
+t2
+```
+
+Cut total menstrual lifespan into four groups, and display the number of women in each group:
+```{r tml grouped}
+## Make a variable that cuts the total menstrual lifespan into chategories:
+table(cut(data$totalMensLifeBfPar,breaks = c(0,15,25,35,max(data$totalMensLifeBfPar,na.rm = T))))
+tml_groups <- cut(data$totalMensLifeBfPar,breaks = c(0,15,25,35,max(data$totalMensLifeBfPar,na.rm = T)))
+data$tml_groups <- tml_groups
+## Change the reference level:
+data$tml_groups <- relevel(data$tml_groups, ref="(35,48.7]")
+levels(data$tml_groups)
+
+```
+
+
+```{r, echo=F,include=F}
+## Find overlap between the Squamous.carcinoma group and the other uterus subgroups:
+#sapply(uterus.by.histo.LPNR, function(x) sum(uterus.by.histo.LPNR$Squamous.carcinoma %in% x))
+
+### 
+## Royk: 
+## make indicator variable for the regression analysis:
+#royk <- model.matrix(~data[,"roykstat"]) ## Uses "never" (i.e. level 1) as reference.
+royk <-data[,"roykstat"] ## make factor to use in analysis.
+royk[royk==1] <- "never"
+royk[royk==2] <- "ever"
+royk[royk==3] <- "ever"
+royk <- as.factor(royk) ## make factor to use in analysis.
+royk <- relevel(royk,ref="never")
+data$royk_group <- royk
+rm(royk)
+table(data$royk_group)
+
+## MOR: Family history of breast cancer. 
+## Save this variable as a factor:
+data$MOR <- as.factor(data$MOR)
+levels(data$MOR)[levels(data$MOR)=="0"] <- "Yes"
+levels(data$MOR)[levels(data$MOR)=="1"] <- "No"
+data$MOR <- relevel(data$MOR,ref="No")
+table(data$MOR)
+```
+
+```{r pick out the right data, echo=F,include=F}
+############
+## UTERUS:
+############
+## Censor women that have uterus cancer, but are in a different subgroup than what is under study: 
+censIndUterus <- lapply(uterus.by.histo.LPNR, function(x) as.numeric(rownames(data) %in% x))
+lapply(censIndUterus,table)
+
+## make a data.matrix that will be used for analysis:
+dd.sub.uterus <- lapply(censIndUterus, function(x) cbind(data[,c("LPNR","innAlderPost","attained_age")],x,data[,c("parity","totalppdur","BMI","royk_group","MOR","totalMensLifeBfPar","tml_groups")]))
+ 
+###########
+## OVARIAN:
+###########
+## Censor women that have ovarian cancer, but are in a different subgroup than what is under study: 
+censIndOvarian <- lapply(ovarian.by.histo.LPNR, function(x) as.numeric(rownames(data) %in% x))
+lapply(censIndOvarian,table)
+## Make a list with the full data that will be used in the analysis. One data set per histological subtype.
+dd.sub.ovarian <-lapply(censIndOvarian, function(x) cbind(data[,c("LPNR","innAlderPost","attained_age")],x,data[,c("parity", "totalppdur","BMI","royk_group","MOR","totalMensLifeBfPar","tml_groups")]))
+```
+
+```{r kaplan meier, echo=F, eval=F}
+############################
+## Test kaplan meier plott:
+############################
+require(survival)
+## We want to make a kaplan-meier plot for women with a given cancer. That is, given that you will have uterus or ovarian 
+## cancer (and a specified subgroup), at what age does it occur?
+survFunc <- function(subData){
+  subData <- subData[subData$x==1,]
+  print(fivenum(subData$attained_age))
+  survfit(coxph(Surv(innAlderPost, attained_age, x) ~ 1, data=subData),type="kaplan-meier")
+}
+
+s.All.endo <- survFunc(dd.sub.uterus$All.endometrial)
+s.All.epi <- survFunc(dd.sub.ovarian$All.epithelial)
+s.EC.ov <- survFunc(dd.sub.ovarian$Endometrioid.clearCell)
+s.EC.ut <- survFunc(dd.sub.uterus$Endometrioid.clearCell)
+s.S.ov <- survFunc(dd.sub.ovarian$Serous)
+s.S.ut <- survFunc(dd.sub.uterus$Serous)
+
+pdf("kaplan-meier-the-way-the-patologist-have-classified-only-events.pdf")
+plot(s.All.endo,lty=1,conf.int=F)
+lines(s.EC.ut, lty=1,col=2,conf.int=F)
+lines(s.S.ut, lty=1, col=3,conf.int=F)
+lines(s.All.epi,lty=1,col=4,conf.int=F)
+lines(s.EC.ov, lty=1, col=5,conf.int=F)
+lines(s.S.ov, lty=1, col=6,conf.int=F)
+legend("bottomleft",c("All.endo","EndoClear.uterus","Serous.ut", "All.epith","EndoClear.ovarian","Serous.ovarian"),lty=1,col=1:6)
+dev.off()
+
+## Flyttinger:
+s.All.endo.plus.EC <- survFunc(dd.sub.uterus$All.endometrial.plus.ovary.Endometrioid.clearCell)
+s.All.epi.minus.EC <- survFunc(dd.sub.ovarian$All.epithelial.minus.Endometrioid.clearCell)
+s.EC.moved <- survFunc(dd.sub.uterus$Endometrioid.clearCell.moved)
+
+pdf("Endo-clearCell-moved-kaplan-meier-only-events.pdf")
+plot(s.All.endo.plus.EC,lty=1,conf.int=F)
+lines(s.All.epi.minus.EC, lty=1,col=2,conf.int=F)
+lines(s.EC.moved,lty=1,col=3,conf.int=F)
+lines(s.EC.ov, lty=1,col=4,conf.int=F)
+legend("topright",c("All.endo.plus.EC","All.epi.minus.EC","EC uterus new", "EC ovarian"),lty=1,col=1:4)
+dev.off()
+
+## Serous:
+s.All.endo.plus.Serous <- survFunc(dd.sub.uterus$All.endometrial.plus.ovary.Serous)
+s.All.epi.minus.Serous <- survFunc(dd.sub.ovarian$All.epithelial.minus.Serous)
+s.Serous.moved <- survFunc(dd.sub.uterus$Serous.moved)
+
+pdf("serous-moved-kaplan-meier-only-events.pdf")
+plot(s.All.endo.plus.Serous,lty=1,conf.int=F)
+lines(s.All.epi.minus.Serous, lty=1,col=2,conf.int=F)
+lines(s.Serous.moved,lty=1,col=3,conf.int=F)
+lines(s.S.ov, lty=1,col=4,conf.int=F)
+legend("topright",c("All.endo.plus.Serous","All.epi.minus.Serous","Serous uterus new", "Serous ovarian"),lty=1,col=1:4)
+dev.off()
+
+## --------------------
+## Due to left truncation and few women under study on the early cancers, some of the KM-curves 
+## drops from 1 and directly down to zero. We rather try to look at KM from age at diagnosis and 
+## until death or censoring. 
+## For women with a uterus/ovarian cancer diagnosis, age at diagnosis and attained age is the same. This is our start date in cox. 
+## End date will be age of death (with censoring indicator = 1), age of emigration or 31.12.2013. 
+
+dd <- cbind(data[,c("doddt", "emigdt")], as.Date("2013-12-31")) ## matrix of dates, one row per women.
+end_date <- apply(dd, 1, min, na.rm=T) ## Pick out the smallest of the dates. This is our attained date.
+end_date <- as.Date(end_date)
+cens_ind_km <- rep(0,nrow(data))
+cens_ind_km[end_date==data$doddt] <- 1
+table(cens_ind_km)
+
+out_year <- as.numeric(substr(end_date,1,4)) ## Extract year of follow-up.
+attained_age_km <- data$STARTALD + round((end_date - data$STARTDAT)/365.25,2) ## Add three digits to give women with short follow-up a strictly positive follow-up time.
+head(sort(attained_age_km-data$STARTALD))
+sum(round((end_date - data$STARTDAT)/365.25,2)==0) ## We observe that we need two digits to give women with short follow-up a strictly positive follow-up time.
+class(attained_age_km)
+attained_age_km <- as.numeric(attained_age_km)
+head(attained_age_km)
+
+## For the women that we will investigate, the "attained date" calculated earlier (not in this script) is the diagnosis date.
+## We will rename: 
+start_ald_km <- data$attained_age
+
+## Add the three new variables to the data: 
+data <- cbind(data,start_ald_km,attained_age_km,cens_ind_km)
+
+## Make KM curves for only women that has a given cancer under study: 
+
+ov.lpnr <- ovarian.by.histo.LPNR[2:4]
+str(ov.lpnr)
+ut.lpnr <- uterus.by.histo.LPNR[2:4]
+str(ut.lpnr)
+
+km <- function(sub_lpnr, dd){
+  subData <- dd[sub_lpnr,]
+  survfit(coxph(Surv(start_ald_km, attained_age_km, cens_ind_km) ~ 1, data=subData),type="kaplan-meier")
+  }
+
+km_ovarian <- lapply(ov.lpnr,function(x,dd) km(sub_lpnr=as.character(x), dd), dd=data)
+km_uterus <- lapply(ut.lpnr, function(x,dd) km(sub_lpnr=as.character(x), dd), dd=data)
+
+pdf("KM-alder-fra-diagnose-til-død.pdf")
+plot(km_uterus$All.endometrial,lty=1,conf.int=F)
+mapply(function(x,y) lines(x,lty=1,col=y, conf.int=F), x=km_uterus,y= 1:3)
+mapply(function(x,y) lines(x,lty=1,col=y, conf.int=F), x=km_ovarian,y= 4:6)
+legend("bottomleft",c(names(km_uterus), names(km_ovarian)), lty=1, col=1:6)
+dev.off()
+```
+
+```{r tabell 1, echo=F, eval=F}
+############################
+## MAke descriptive table 1
+#############################
+source("descriptive-table-artikkel.R")
+## Hormonal/reporductive variables (cont)
+hc <- c("MENSALD","klimAld","parity","totalamm","totalppdur","BMI","totalMensLifeBfPar")
+op <- c("royk_group","MOR")
+radNavn <- c("N","Menarche (age)","Menopause (age)","Parity","Cum. breastfeeding (mo.)","Cum. OC use (y)", "BMI","Total menstrual lifesp.","Smoking: ever users (%)","Fam. hist of BC (%)")
+tabU <- descrTabl1(c.by.histo.LPNR = uterus.by.histo.LPNR[c("All.uterus", "All.endometrial","Endometrioid.clearCell", "Serous","non.endometrial")], contVar = hc, dichoVar = op, rNames = radNavn)
+print(tabU)
+tabO <- descrTabl1(c.by.histo.LPNR = ovarian.by.histo.LPNR[c("All.ovarial","All.epithelial","Endometrioid.clearCell", "Serous","non.epithelial")], contVar = hc, dichoVar = op, rNames = radNavn)
+print(tabO)
+
+table1 <- cbind(tabU, tabO[,2:ncol(tabO)])
+print(table1)
+
+## Print the number of women with missing values for each variable: 
+naVal <- as.matrix(sapply(data[,c(hc,op)],function(x)sum(is.na(x))))
+colnames(naVal) <- paste("Number of NA-values among n=",nrow(data),"women")
+naVal
+#######################
+## Save table to file:
+#######################
+## AS EXCEL:
+write.csv2(table1,file.path(resultPath,paste0("descriptive-table1-artikkel-",Sys.Date(),".csv")))
+write.csv2(naVal, file.path(resultPath, paste0("number-of-NA-values-covariates.csv")))
+#write.table(table1,file.path(resultPath,paste0("descriptive-table1-artikkel-",Sys.Date(),".csv")),sep="\t",row.names=T,col.names=T,quote=F)
+
+```
+
+## Univariate Cox analysis
+
+Do univariate Cox analysis with total menstural lifespan as covariate (both grouped and continous), and age at menopause as inclusion time. 
+We will also do univariate Cox analysis for the variables BMI, smoking status, diabetes, and familiy history of breast cancer. 
+```{r univariate cox, echo=F}
+############################################################
+#### Compute relative risk, check Cox assumption 
+#### and create output for each of the histological groups:
+#############################################################
+## Load function to run analysis:
+source("do_all_cox.R") ## load function to run analysis:
+```
+
+## Univariate results uterus cancer 
+
+----------------------
+```{r univariate uterus, comment=NA}
+sub.uterus <- mapply(do_all_cox, dd.sub.uterus, navn=paste(names(dd.sub.uterus),"uterus-grouped",sep="-"),SIMPLIFY = FALSE)
+```
+
+## Univariate results ovarian cancer
+
+----------------------
+```{r univariate ovarian, comment=NA}
+sub.ovarian <- mapply(do_all_cox, dd.sub.ovarian, navn=paste(names(dd.sub.ovarian),"ovarian-grouped",sep="-"),SIMPLIFY = FALSE)
+```
+
+```{r make table of univariate output, echo=F, eval=F}
+#########################
+## Make table of output
+## with HR and 
+## (lower 95%, upper95%) 
+## confidcene interval
+#########################
+
+## This function will extract the results from the files with univariate results, and put them togheter:
+makeNewTab <- function(navn1, navn2){
+  subTabl <- read.csv2(file=file.path(resultPath,paste0(navn1[1],navn2,".csv")))
+  for(i in navn1[2:length(navn1)]){
+    subTabl <- cbind(subTabl,read.csv2(file=file.path(resultPath,paste0(i,navn2,".csv")))[,4:6])
+    }
+  colnames(subTabl)[grep("HR",colnames(subTabl))] <- paste("HR",navn1,sep=".") #Add name of cancer subtype for each hazard ratio.
+  rownames(subTabl) <- subTabl[,1]
+  subTabl <- subTabl[,-c(1:3)] ## remove variable names and number of cases and cohort
+  ## Extract variables of interest:
+#  subTabl <- subTabl[c("bmi.kont","royk.never","royk.ever","MOR.No","MOR.Yes","klimAldStatus.pre","klimAldStatus.post","paritet.kont","ppdur.kont"),]
+ # rbind(subTabl[6:9,],subTabl[1:5,]) #rearrange rows
+  }
+
+##-------------------- 
+
+## The two functions below are used to merge confidence intervals into the form: "(lower.95, upper.95)":
+pritableVersion <- function(inn,dd){
+  tt <- cbind(as.character(dd[,inn[1]]),paste0("(",dd[,inn[2]],",",dd[,inn[3]],")"))
+  }
+
+makePri <- function(subTabell){
+  uu <- 1:3
+  tab3 <- NULL
+  while(max(uu)<=ncol(subTabell)){
+    tab3 <- cbind(tab3,pritableVersion(uu,subTabell))
+    uu <- uu+3
+    } 
+  rownames(tab3) <- rownames(subTabell)
+  colnames(tab3)[seq(2,ncol(tab3),by=2)] <- rep("95% CI",ncol(tab3)/2)
+  colnames(tab3)[seq(1,ncol(tab3),by=2)] <- colnames(subTabell)[seq(1,ncol(subTabell),by=3)]
+  return(tab3)
+  }
+  
+##-------------------- 
+
+## Use funciton to extract table:
+## Uterus
+navnU <- paste(names(dd.sub.uterus),"uterus-grouped",sep="-")
+navnFile <- "_created_2015-09-03"
+newU <- makeNewTab(navnU,navnFile)
+tab3 <- makePri(newU)
+tab3
+
+## ovarian
+navnO <- paste(names(dd.sub.ovarian),"ovarian-grouped",sep="-")
+newO <- makeNewTab(navnO,navnFile)
+tab3o <- makePri(newO)
+tab3o
+
+## Merge uterus and ovarian tables:
+tab3 <- cbind(tab3,tab3o)
+## Add the number of cases per subtype:
+uC <- sapply(uterus.by.histo.LPNR,length)
+oC <- sapply(ovarian.by.histo.LPNR,length)
+## merge:
+cases <- c(uC,oC)
+## insert separator in order to merge with tab3:
+cc <- rep("",length(cases)*2)
+cc[seq(1,length(cc),by=2)] <- cases
+
+## Merge the number of cases with the table: 
+tab33 <- rbind(cc,tab3)
+rownames(tab33)[1] <- "Numer of cases"
+tab33
+
+## Write to file:
+write.csv2(tab33,file=file.path(resultPath,paste0("merged-ovarian-and-uterus-univariateCox-results-HR-and-CI",navnFile,".csv")))
+#write.table(tab33,file.path(resultPath,"tubal-ovarian-and-uterus-univariateCox-results-HR-and-CI-10-july-2015.txt"),sep="\t",row.names=T,col.names=T,quote=F)
+
+################################################
+## Make table of results to use in forest plot: 
+###############################################
+## Merge uterus and ovarian output, and write to file:
+outForForestPlot <- cbind(newU,newO) ## Merge output
+## Add name of cancer for lower and upper confidence interval.
+colnames(outForForestPlot)[grep("Lower",colnames(outForForestPlot))] <- paste("LCI",c(navnU,navnO),sep=".") #Add name of cancer for lower confidence interval. 
+colnames(outForForestPlot)[grep("Upper",colnames(outForForestPlot))] <- paste("UCI",c(navnU,navnO),sep=".") #Add name of cancer for upper confidence interval. 
+## Remove the "-grouped" in the column names:
+colnames(outForForestPlot) <- sapply(colnames(outForForestPlot), function(x)substr(x,1,nchar(x)-8))
+colnames(outForForestPlot)
+## Want to transpose the data to make sure that histological subtype is in the rows, and covariates with hazard ratio, lower confidence interval and upper confidence interval are in the columns.
+
+## Variables that we want to extract: 
+rowNames <- c("parity","totalppdur","BMI","royk_group.ever","MOR.Yes","totalMensLifeBfPar") ## Row names
+makeOut <- function(navn,rr=rowNames){
+  cc <- paste(c("HR","LCI","UCI"),navn,sep=".") ## column names
+ as.vector(t(outForForestPlot[rr,cc]))
+ }
+nn <- c(paste0(names(t1),"-uterus"),paste0(names(t2),"-ovarian"))
+nn
+output <- t(sapply(nn,makeOut))
+output
+colnames(output) <- t(as.vector(sapply(rowNames,function(x)paste(x,c("HR","LCI","UCI"),sep="."))))
+## Add the number of cases.
+cases
+## Extract cases for the histological subtypes under study:
+#kasus <- c(cases[c("All.endometrial","All.epithelial")],cases[grep("Serous",names(cases))]) ## Serous is a problem. Add manually.
+output <- data.frame(group=I(rownames(output)),Cases=cases,output) ## Add variable with name of the histological group
+#kasus <- data.frame(group=I(names(cases)),Cases=cases)
+#output <- cbind(cases,output)
+output
+## output is now the data.frame that can be used to make forest plots. Save to file! 
+write.csv2(output,file=file.path(resultPath,paste0("univariate-cox-for-forest-plot-HR-and-CI",Sys.Date(),".csv")),row.names=F)
+
+
+```
+
+```{r test for heterogenity,echo=F,eval=FALSE}
+## Test for heterogenity ##
+
+##We want to test if the hazard ratio for each of the four variables for subgroups serous (ovarian + uterus) and endometroid ##(ovarian + uterus) are different. This will be done using a Wald test.
+
+# testHetero <- function(multi.cox.ovarian, multi.cox.uterus){
+#   ## Extract HR and standard error:
+#   hrSd.uterus <- summary(multi.cox.uterus)$coef[,c(1,3)]
+#   hrSd.ovarian <- summary(multi.cox.ovarian)$coef[,c(1,3)]
+#   waldTest <- function(x,y) {
+#     W <- (x[,"coef"] - y[,"coef"])^2 / (x[,"se(coef)"]^2 + y[,"se(coef)"]^2)
+#     pval = 1-pchisq(W,1)
+#     return(pval)
+#     pval
+#     }
+#   
+#   output <- waldTest(hrSd.uterus, hrSd.ovarian) ## apply wald test
+#   print(output)
+#   }
+
+testHeteroUnivar <- function(uni.cox.uterus,uni.cox.ovarian){
+  ## Extract HR and standard error:
+  hrSd.uterus <- t(sapply(uni.cox.uterus, function(x) summary(x)$coef[c(1,3)]))
+  hrSd.ovarian <- t(sapply(uni.cox.ovarian, function(x) summary(x)$coef[c(1,3)]))
+  colnames(hrSd.ovarian) <- c("coef","se(coef)") ## Add column names
+  colnames(hrSd.uterus) <- c("coef","se(coef)")
+  waldTest <- function(x,y) {
+    W <- (x[,"coef"] - y[,"coef"])^2 / (x[,"se(coef)"]^2 + y[,"se(coef)"]^2)
+    pval = 1-pchisq(W,1)
+    return(pval)
+    #pval
+    }
+  output <- waldTest(hrSd.uterus, hrSd.ovarian) ## apply wald test
+  #print(round(output,3))
+  }
+
+## The output is the p-value for the test of heterogenity:
+#t1 <- mapply(testHeteroUnivar,sub.uterus["All.endometrial"], sub.ovarian["All.epithelial"])
+uterusSubForTest <- c("All.uterus","All.endometrial","Endometrioid.clearCell","Serous","All.endometrial.plus.ovary.Endometrioid.clearCell","All.endometrial.plus.ovary.Serous")
+ovarialSubForTest <- c("All.ovarial","All.epithelial","Endometrioid.clearCell", "Serous","All.epithelial.minus.Endometrioid.clearCell","All.epithelial.minus.Serous")
+t1 <- mapply(testHeteroUnivar, sub.uterus[uterusSubForTest], sub.ovarian[ovarialSubForTest])
+
+tabP <- t(t1)
+rownames(tabP) <- paste(uterusSubForTest,ovarialSubForTest,sep=" // ")
+tabP
+kable(round(tabP,3))
+
+## Also want to test if the subgroups of ovarian cancer are significantly different from the 
+## main groups (without the subgroup) of ovarian cancer or uterus cancer. 
+## Specific, we test if Endometroid.ClearCell ovarian is different from All.epithelial.minus.Endometroid.Clear.Cell, 
+## and if Endometroid.ClearCell ovarian is different from All.endometrial (uterus). Then we do the same for serous ovarian cancer. 
+ll <- list(sub.ovarian$All.epithelial.minus.Endometrioid.clearCell, sub.uterus$All.endometrial)
+
+p_val1 <- sapply(ll,function(x)testHeteroUnivar(sub.ovarian$Endometrioid.clearCell, x))
+p_val1 <- t(p_val1)
+rownames(p_val1) <- c("Endometroid.clearCell.ovarian // All.epith.minus.Endometroid.clearCell", "Endometroid.clearCell.ovarian // All.endometrial")
+
+ll2 <- list(sub.ovarian$All.epithelial.minus.Serous, sub.uterus$All.endometrial)
+p_val2 <- sapply(ll2, function(x)testHeteroUnivar(sub.ovarian$Serous,x))
+p_val2 <- t(p_val2)
+rownames(p_val2) <- c("Serous.ovarian // All.epith.minus.serous", "Serous.ovarian // All.endometrial")
+
+## Add these tests to the larger matrix of p-values:
+all.pval <- rbind(tabP,p_val1,p_val2)
+all.pval
+
+kable(round(all.pval,3))
+
+## Write to file:
+write.csv2(all.pval, file = file.path(resultPath,paste0("table-of-pvalues-for-heterogenity-univariate-Cox-with-moved-groups",Sys.Date(),".csv")))
+
+
+```
+
+
+## Print session information for future reference:
+
+```{r}
+sessionInfo()
+```
+
