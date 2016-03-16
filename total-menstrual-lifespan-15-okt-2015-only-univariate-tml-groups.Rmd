@@ -757,7 +757,7 @@ rownames(tab33)[1] <- "Numer of cases"
 tab33
 
 ## Write to file:
-write.csv2(tab33,file=file.path(resultPath,paste0("merged-ovarian-and-uterus-univariateCox-results-HR-and-CI",navnFile,".csv")))
+write.csv2(tab33,file=file.path(resultPath,paste0("merged-ovarian-and-uterus-univariateCox-results-HR-and-CI",Sys.Date(),".csv")))
 #write.table(tab33,file.path(resultPath,"tubal-ovarian-and-uterus-univariateCox-results-HR-and-CI-10-july-2015.txt"),sep="\t",row.names=T,col.names=T,quote=F)
 
 ################################################
@@ -871,7 +871,6 @@ write.csv2(all.pval, file = file.path(resultPath,paste0("table-of-pvalues-for-he
 
 
 ```
-
 
 ## Print session information for future reference:
 
