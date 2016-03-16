@@ -31,3 +31,4 @@ descrTabl1 <- function(c.by.histo.LPNR, contVar=hc, dichoVar=op, allData=data, t
   return(mm.u)
   }
 
+

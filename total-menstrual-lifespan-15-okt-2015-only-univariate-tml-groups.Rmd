@@ -50,7 +50,7 @@ setwd("/Users/hegemb/Documents/jobb/TICE/ovarian cancer :: Mie Jareid/scripts")
 wd <- getwd()
 setwd("..")
 dataPath <- file.path(getwd(), "data") ## folder to save data files
-resultPath <- file.path(getwd(),"results") ## folder to store results
+resultPath <- file.path(getwd(),"results2") ## folder to store results
 setwd(wd)
 
 #############################################
@@ -421,7 +421,7 @@ censIndUterus <- lapply(uterus.by.histo.LPNR, function(x) as.numeric(rownames(da
 lapply(censIndUterus,table)
 
 ## make a data.matrix that will be used for analysis:
-dd.sub.uterus <- lapply(censIndUterus, function(x) cbind(data[,c("LPNR","innAlderPost","attained_age")],x,data[,c("parity","totalppdur","BMI","royk_group","MOR","totalMensLifeBfPar","tml_groups")]))
+dd.sub.uterus <- lapply(censIndUterus, function(x) cbind(data[,c("LPNR","innAlderPost","attained_age")],x,data[,c("parity","totalppdur","BMI","royk_group","MOR","totalMensLifeBfPar")]))
  
 ###########
 ## OVARIAN:
@@ -430,7 +430,7 @@ dd.sub.uterus <- lapply(censIndUterus, function(x) cbind(data[,c("LPNR","innAlde
 censIndOvarian <- lapply(ovarian.by.histo.LPNR, function(x) as.numeric(rownames(data) %in% x))
 lapply(censIndOvarian,table)
 ## Make a list with the full data that will be used in the analysis. One data set per histological subtype.
-dd.sub.ovarian <-lapply(censIndOvarian, function(x) cbind(data[,c("LPNR","innAlderPost","attained_age")],x,data[,c("parity", "totalppdur","BMI","royk_group","MOR","totalMensLifeBfPar","tml_groups")]))
+dd.sub.ovarian <-lapply(censIndOvarian, function(x) cbind(data[,c("LPNR","innAlderPost","attained_age")],x,data[,c("parity", "totalppdur","BMI","royk_group","MOR","totalMensLifeBfPar")]))
 ```
 
 ```{r kaplan meier, echo=F, eval=F}
@@ -453,7 +453,7 @@ s.EC.ut <- survFunc(dd.sub.uterus$Endometrioid.clearCell)
 s.S.ov <- survFunc(dd.sub.ovarian$Serous)
 s.S.ut <- survFunc(dd.sub.uterus$Serous)
 
-pdf("kaplan-meier-the-way-the-patologist-have-classified-only-events.pdf")
+pdf(file.path(resultPath,"kaplan-meier-the-way-the-patologist-have-classified-only-events.pdf"))
 plot(s.All.endo,lty=1,conf.int=F)
 lines(s.EC.ut, lty=1,col=2,conf.int=F)
 lines(s.S.ut, lty=1, col=3,conf.int=F)
@@ -468,7 +468,7 @@ s.All.endo.plus.EC <- survFunc(dd.sub.uterus$All.endometrial.plus.ovary.Endometr
 s.All.epi.minus.EC <- survFunc(dd.sub.ovarian$All.epithelial.minus.Endometrioid.clearCell)
 s.EC.moved <- survFunc(dd.sub.uterus$Endometrioid.clearCell.moved)
 
-pdf("Endo-clearCell-moved-kaplan-meier-only-events.pdf")
+pdf(file.path(resultPath,"Endo-clearCell-moved-kaplan-meier-only-events.pdf"))
 plot(s.All.endo.plus.EC,lty=1,conf.int=F)
 lines(s.All.epi.minus.EC, lty=1,col=2,conf.int=F)
 lines(s.EC.moved,lty=1,col=3,conf.int=F)
@@ -481,7 +481,7 @@ s.All.endo.plus.Serous <- survFunc(dd.sub.uterus$All.endometrial.plus.ovary.Sero
 s.All.epi.minus.Serous <- survFunc(dd.sub.ovarian$All.epithelial.minus.Serous)
 s.Serous.moved <- survFunc(dd.sub.uterus$Serous.moved)
 
-pdf("serous-moved-kaplan-meier-only-events.pdf")
+pdf(file.path(resultPath,"serous-moved-kaplan-meier-only-events.pdf"))
 plot(s.All.endo.plus.Serous,lty=1,conf.int=F)
 lines(s.All.epi.minus.Serous, lty=1,col=2,conf.int=F)
 lines(s.Serous.moved,lty=1,col=3,conf.int=F)
@@ -533,7 +533,7 @@ km <- function(sub_lpnr, dd){
 km_ovarian <- lapply(ov.lpnr,function(x,dd) km(sub_lpnr=as.character(x), dd), dd=data)
 km_uterus <- lapply(ut.lpnr, function(x,dd) km(sub_lpnr=as.character(x), dd), dd=data)
 
-pdf("KM-alder-fra-diagnose-til-død.pdf")
+pdf(file.path(resultPath,"KM-alder-fra-diagnose-til-død.pdf"))
 plot(km_uterus$All.endometrial,lty=1,conf.int=F)
 mapply(function(x,y) lines(x,lty=1,col=y, conf.int=F), x=km_uterus,y= 1:3)
 mapply(function(x,y) lines(x,lty=1,col=y, conf.int=F), x=km_ovarian,y= 4:6)
@@ -541,15 +541,24 @@ legend("bottomleft",c(names(km_uterus), names(km_ovarian)), lty=1, col=1:6)
 dev.off()
 ```
 
-```{r tabell 1, echo=F, eval=F}
+```{r tabell 1, echo=T, eval=T}
 ############################
 ## MAke descriptive table 1
 #############################
+## Add two variables: Ever users of oral contraceptives, and ever breastfed.
+
+## Ever user of oc: ppilleuse == 0
+data$everUseOC <- factor(ifelse(data[,"ppilleuse"]==1,"never","ever"),levels=c("never","ever"))
+
+## Ever breastfed: totalamm != 0
+data$everBreast <- factor(ifelse(data[,"totalamm"]==0,"never","ever"),levels=c("never","ever"))
+
+## Load function:
 source("descriptive-table-artikkel.R")
 ## Hormonal/reporductive variables (cont)
-hc <- c("MENSALD","klimAld","parity","totalamm","totalppdur","BMI","totalMensLifeBfPar")
-op <- c("royk_group","MOR")
-radNavn <- c("N","Menarche (age)","Menopause (age)","Parity","Cum. breastfeeding (mo.)","Cum. OC use (y)", "BMI","Total menstrual lifesp.","Smoking: ever users (%)","Fam. hist of BC (%)")
+hc <- c("MENSALD","klimAld","parity","totalamm","totalppdur","BMI","totalMensLifeBfPar") ## continous variables.
+op <- c("royk_group","MOR","everUseOC","everBreast") ## Dichotomous variables.
+radNavn <- c("N","Menarche (age)","Menopause (age)","Parity","Cum. breastfeeding (mo.)","Cum. OC use (y)", "BMI","Total menstrual lifesp.","Smoking: ever users (%)","Fam. hist of BC (%)","Ever user of OC (%)", "Ever breastfed (%)")
 tabU <- descrTabl1(c.by.histo.LPNR = uterus.by.histo.LPNR[c("All.uterus", "All.endometrial","Endometrioid.clearCell", "Serous","non.endometrial")], contVar = hc, dichoVar = op, rNames = radNavn)
 print(tabU)
 tabO <- descrTabl1(c.by.histo.LPNR = ovarian.by.histo.LPNR[c("All.ovarial","All.epithelial","Endometrioid.clearCell", "Serous","non.epithelial")], contVar = hc, dichoVar = op, rNames = radNavn)
@@ -567,10 +576,71 @@ naVal
 #######################
 ## AS EXCEL:
 write.csv2(table1,file.path(resultPath,paste0("descriptive-table1-artikkel-",Sys.Date(),".csv")))
-write.csv2(naVal, file.path(resultPath, paste0("number-of-NA-values-covariates.csv")))
+write.csv2(naVal, file.path(resultPath, paste0("number-of-NA-values-covariates",Sys.Date(),".csv")))
 #write.table(table1,file.path(resultPath,paste0("descriptive-table1-artikkel-",Sys.Date(),".csv")),sep="\t",row.names=T,col.names=T,quote=F)
 
 ```
+
+We will make a t-test/chi-squared test to check for difference in means/frequencies for table 1 between cohort and all cancers (uterus and ovary separate). 
+```{r t-test/chi-square test for table1}
+sub.ov <- data[as.character(ovarian.by.histo.LPNR[["All.ovarial"]]),hc]
+sub.ut <- data[as.character(uterus.by.histo.LPNR[["All.uterus"]]),hc]
+
+## T-test:
+p.ov <- p.ut <- vector("list",length(hc))
+names(p.ov) <- names(p.ut) <- hc
+for(i in hc){
+  p.ov[i] <- t.test(data[,i],data[as.character(ovarian.by.histo.LPNR[["All.ovarial"]]),i])$p.value
+  p.ut[i] <- t.test(data[,i],data[as.character(uterus.by.histo.LPNR[["All.uterus"]]),i])$p.value
+}
+p.ov
+p.ut
+
+## Chi-square test for the categorical variables:
+pp.ov <- pp.ut <- vector("list",length(op))
+names(pp.ov) <- names(pp.ut) <- op
+for(i in op){
+  prob.cohort <- prop.table(table(data[,i])) ## probablities for each group according to cohort.
+  uu.o <- table(data[as.character(ovarian.by.histo.LPNR[["All.ovarial"]]),i])
+  uu.u <- table(data[as.character(uterus.by.histo.LPNR[["All.uterus"]]),i])
+  pp.ov[i] <- chisq.test(uu.o,p=prob.cohort)$p.value
+  pp.ut[i] <- chisq.test(uu.u,p=prob.cohort)$p.value
+}
+pp.ov
+pp.ut
+
+## Bind results together and save to excel file:
+p.val.table1 <- cbind(c(p.ut,pp.ut),c(p.ov,pp.ov))
+colnames(p.val.table1) <- c("uterus","ovarial")
+rownames(p.val.table1) <- radNavn[2:12]
+print(p.val.table1)
+
+## Write to file: 
+write.csv2(p.val.table1,file.path(resultPath,paste0("p-values-for-descrip-table1-Cohort-vs-all-cancers",Sys.Date(),".csv")))
+
+## Look at the percent of women that have given birth for the cohort, all.ovarial and all.uterus:
+# prop.table(table(data$parity))[1]
+# prop.table(table(data[as.character(ovarian.by.histo.LPNR[["All.ovarial"]]),"parity"]))[1]
+# prop.table(table(data[as.character(uterus.by.histo.LPNR[["All.uterus"]]),"parity"]))[1]
+
+# ## Ever use OC:
+# pn <- 65609/146316
+# pe <- 80707/146316
+# on <- 654
+# oe <- 414
+# fn <- pn*1068
+# fe <- pe * 1068
+# aa <- ((on - fn)**2)/fn
+# bb <- ((oe - fe)**2)/fe
+# aa+bb
+# dchisq(aa+bb, 1)
+# qchisq(.95, df=1)
+
+
+
+```
+
+
 
 ## Univariate Cox analysis
 
@@ -589,17 +659,17 @@ source("do_all_cox.R") ## load function to run analysis:
 
 ----------------------
 ```{r univariate uterus, comment=NA}
-sub.uterus <- mapply(do_all_cox, dd.sub.uterus, navn=paste(names(dd.sub.uterus),"uterus-grouped",sep="-"),SIMPLIFY = FALSE)
+sub.uterus <- mapply(do_all_cox, dd.sub.uterus, navn=paste(names(dd.sub.uterus),"uterus-grouped",sep="-"),resPath=resultPath,makeOutput=TRUE,SIMPLIFY = FALSE)
 ```
 
 ## Univariate results ovarian cancer
 
 ----------------------
 ```{r univariate ovarian, comment=NA}
-sub.ovarian <- mapply(do_all_cox, dd.sub.ovarian, navn=paste(names(dd.sub.ovarian),"ovarian-grouped",sep="-"),SIMPLIFY = FALSE)
+sub.ovarian <- mapply(do_all_cox, dd.sub.ovarian, navn=paste(names(dd.sub.ovarian),"ovarian-grouped",sep="-"),resPath=resultPath,makeOutput=TRUE,SIMPLIFY = FALSE)
 ```
 
-```{r make table of univariate output, echo=F, eval=F}
+```{r make table of univariate output, echo=T, eval=T}
 #########################
 ## Make table of output
 ## with HR and 
@@ -608,18 +678,32 @@ sub.ovarian <- mapply(do_all_cox, dd.sub.ovarian, navn=paste(names(dd.sub.ovaria
 #########################
 
 ## This function will extract the results from the files with univariate results, and put them togheter:
-makeNewTab <- function(navn1, navn2){
-  subTabl <- read.csv2(file=file.path(resultPath,paste0(navn1[1],navn2,".csv")))
+makeNewTab <- function(navn1){
+  subTabl <- read.csv2(file=file.path(resultPath,paste0(navn1[1],".csv")),stringsAsFactors = F)
   for(i in navn1[2:length(navn1)]){
-    subTabl <- cbind(subTabl,read.csv2(file=file.path(resultPath,paste0(i,navn2,".csv")))[,4:6])
-    }
+    subTabl <- cbind(subTabl,read.csv2(file=file.path(resultPath,paste0(i,".csv")),stringsAsFactors = F)[,4:6])
+  }
   colnames(subTabl)[grep("HR",colnames(subTabl))] <- paste("HR",navn1,sep=".") #Add name of cancer subtype for each hazard ratio.
   rownames(subTabl) <- subTabl[,1]
   subTabl <- subTabl[,-c(1:3)] ## remove variable names and number of cases and cohort
-  ## Extract variables of interest:
-#  subTabl <- subTabl[c("bmi.kont","royk.never","royk.ever","MOR.No","MOR.Yes","klimAldStatus.pre","klimAldStatus.post","paritet.kont","ppdur.kont"),]
- # rbind(subTabl[6:9,],subTabl[1:5,]) #rearrange rows
-  }
+  
+  ## Invert TML: 
+  tmp <- round(1/as.numeric(subTabl["totalMensLifeBfPar",]),2)
+  
+  ## Change upper and lower confidence limits:
+  nn <- ncol(subTabl)
+  aa <- vector(length = nn) # make empty vector
+  aa[seq(1,nn,by=3)] <- seq(1,nn,by=3) 
+  #aa
+  aa[seq(2,nn,by=3)] <- seq(3,nn,by=3)
+  #aa
+  aa[seq(3,nn,by=3)] <- seq(2,nn,by=3)
+  #aa
+  tmp <- tmp[aa]
+  
+  subTabl["totalMensLifeBfPar",] <- tmp
+  return(subTabl)
+}
 
 ##-------------------- 
 
@@ -646,14 +730,13 @@ makePri <- function(subTabell){
 ## Use funciton to extract table:
 ## Uterus
 navnU <- paste(names(dd.sub.uterus),"uterus-grouped",sep="-")
-navnFile <- "_created_2015-09-03"
-newU <- makeNewTab(navnU,navnFile)
+newU <- makeNewTab(navnU)
 tab3 <- makePri(newU)
 tab3
 
 ## ovarian
 navnO <- paste(names(dd.sub.ovarian),"ovarian-grouped",sep="-")
-newO <- makeNewTab(navnO,navnFile)
+newO <- makeNewTab(navnO)
 tab3o <- makePri(newO)
 tab3o
 

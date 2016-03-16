@@ -16,7 +16,7 @@
 ## - navn: Name used to generate files.
 ## The function returns a coxph object.
 
-do_all_cox <- function(data.sub, navn){
+do_all_cox <- function(data.sub, navn,resPath,makeOutput){
   
   #############################################
   ## Import libraries:
@@ -64,6 +64,11 @@ do_all_cox <- function(data.sub, navn){
   #   
   ## MAKE TABLE OF OUTPUT ##
   outTab <- do_make_table_HR(coxfit, variable.list, event, navn, lpnr)
+  ## Write table to file if requested in the "makeOutput":
+  if(makeOutput == TRUE){
+    write.csv2(outTab, file=file.path(resPath,paste0(navn,".csv")))
+  }
+ 
   
   return(coxfit)
 }
