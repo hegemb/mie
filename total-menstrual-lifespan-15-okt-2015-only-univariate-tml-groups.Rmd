@@ -872,6 +872,107 @@ write.csv2(all.pval, file = file.path(resultPath,paste0("table-of-pvalues-for-he
 
 ```
 
+
+Add multivariate analysis
+
+*** Multivariate Cox analysis ***
+
+For multivariate Cox analysis, we now only inlude the covariates BMI, smoking status, TML and familiy history of breast cancer.
+```{r multivariate Cox, comment=NA}
+####################################
+## MULTIVARIATE COX 
+####################################
+source("do_multivariate_cox.R")
+#fileName <- file.path(resultPath,"coxfit-objects-uterus-ovarian-of-histological-subgroups.Rdata")
+#load(fileName)
+
+## Input is dd1; a data set with lpnr, startAld, stoppAld, event, and covariates,
+## and "navn" which is the name of the cancer type (for print output):zx
+mult.cox <- function(dd1,navn){
+  nn <- names(dd1)  
+  tmp.cox <- mapply(function(x,y){oo <- do_multivariate_cox(x); print(paste("Multivariate Cox regression:",y,"-",navn)); print(summary(oo)); return(oo)}, x = dd1, y = nn, SIMPLIFY = FALSE) ## SIMPLIFY = FALSE option will make sure that a list is returned.
+  return(tmp.cox)
+  }
+
+
+
+```
+
+*** Multivariate Cox regression for uterus cancer
+
+-----------
+```{r multi cox uterus, comment=NA}
+## Run multivariate Cox regression:
+## Remove the columns with parity and duration of OC use:
+dd.sub.uterus.multivar <- lapply(dd.sub.uterus,function(x) return(x[,setdiff(names(x),c("parity","totalppdur"))]))
+## Do multivariate Cox regression:
+uterus.multi.cox.BfPar <- mult.cox(dd.sub.uterus.multivar,"uterus_BfPar")
+```
+
+
+```{r table output multivariate uterus, comment=NA}
+## Make table of results. 
+## NB!! This table will be imported and used to create the forest plot. 
+
+tableHRCIpval <- function(multi.cox,name){
+  hr <- lapply(multi.cox,function(x)round(summary(x)$conf.int[,c(1,3,4)],2)) ## Extract HR, lower.ci and upper.ci.
+  nEvent <- sapply(multi.cox, function(x)summary(x)$nevent)
+  test <- mapply(function(x,y){t(cbind(x,summary(y)$coef[,5]))}, x=hr, y=multi.cox) # Add p-value
+  test <- rbind(nEvent,test)# Add number of cases
+  tabell1 <- t(test)
+  s1 <- c("HR","LCI","UCI","pval")
+  s2 <- rownames(hr[[1]])
+  rNames <- sapply(s2,function(x)paste(x,s1,sep="."))
+  colnames(tabell1) <- c("nEvent",as.vector(rNames))
+  print(round(tabell1,3))
+  ## Write table to file:
+  write.csv2(round(tabell1,3), file = file.path(resultPath,paste0("table-of-multivariate-Cox-regression-",name,".csv")))
+  
+  ## Make table without CI (to make it smaller):
+  oo <- grep("CI", colnames(tabell1))
+  tabell1.2 <- tabell1[,-oo]
+  print(round(tabell1.2,3))
+  }
+
+## Will only show the histological subtypes "All.endometrial", "Endometroid.clearCell", and "Serous" in the plot:
+tableHRCIpval(uterus.multi.cox.BfPar[c("All.endometrial","Endometrioid.clearCell","Serous")], "uterus-parity-breastFeed")
+```
+
+*** Multivariate Cox regression for ovarian cancer
+-----------
+
+```{r multi cox ovarian , comment=NA}
+## Run multivariate Cox regression:
+## Remove the column with parity and duration of OC use:
+dd.sub.ovarian.multivar <- lapply(dd.sub.ovarian,function(x) return(x[,setdiff(names(x),c("parity","totalppdur"))]))
+## Do multivariate Cox regression:
+ovarian.multi.cox.BfPar <- mult.cox(dd.sub.ovarian.multivar,"ovarian_BfPar")
+## Make table of output. We will only show the histological subtypes "All.epithelial","Endometroid.clearCell","Serous"
+tableHRCIpval(ovarian.multi.cox.BfPar[c("All.epithelial","Endometrioid.clearCell","Serous")], "ovarian-parity-breastFeed")
+
+```
+
+
+```{r make a table of multivariate results for paper}
+tableHR <- function(multi.coxU, multi.coxO,name){
+  multi.coxU <-  multi.coxU[c("All.endometrial","Endometrioid.clearCell" ,"Serous")]
+  multi.coxO <- multi.coxO[c("All.epithelial","Endometrioid.clearCell", "Serous")]
+  hrU <- lapply(multi.coxU,function(x){mm <- cbind(round(summary(x)$conf.int[,c(1,3,4)],2),summary(x)$coef[,5]); colnames(mm)[4] <- "P-value"; return(mm)}) 
+  ## Extract HR, lower.ci and upper.ci.
+  hrO <- lapply(multi.coxO,function(x){mm <- cbind(round(summary(x)$conf.int[,c(1,3,4)],2),summary(x)$coef[,5]); colnames(mm)[4] <- "P-value"; return(mm)}) 
+  ## Extract HR, lower.ci and upper.ci.
+  tt <- c(hrU,hrO)
+ # hr$nEvent <- sapply(multi.cox, function(x)summary(x)$nevent)
+   #write.csv2(tt, file = file.path(resultPath,paste0("table-of-multivariate-Cox-regression-",name,Sys.Date(),".csv")))
+ write.csv2(tt, file = file.path(resultPath,paste0("For-article-table-of-multivariate-Cox-regression-",name,"-",Sys.Date(),".csv")))
+ return(tt) 
+  }
+
+tableHR(multi.coxU = uterus.multi.cox.BfPar, multi.coxO = ovarian.multi.cox.BfPar, name="uterus-and-ovarian-parity-breastFeed")
+
+```
+
+
 ## Print session information for future reference:
 
 ```{r}
